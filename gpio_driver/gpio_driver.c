@@ -175,7 +175,7 @@ char* gpio_driver_command;
 char string_cont[9] = {'-', '-', '-', '-', '-', '-', '-', '-', '-'};
 
 /*Default mode is impulse*/
-int mode = 1; // kontinualni na 1
+int mode = 0; // kontinualni na 1
 
 /* Virtual address where the physical GPIO address is mapped */
 void* virt_gpio_base;
@@ -420,28 +420,25 @@ void non_active(int* mics)
 void array_to_string(int mics[])
 {
     int i;
-    for(i = 0; i < mic_number; i++){
-        string_cont[i] = mic_array[i] + '0'; 
-        //printk("%c", string_cont[i]);
-        //snprintf(string, sizeof(string), "%d ", mic_array[i]);
-        //string[i] =  mic_array[i] + '0';
-        //itoa(mic_array[i], string[i], 10);
+    for(i = 0; i < mic_number; i++) {
+        string_cont[i] = mic_array[i] + '0';
     }
-    //string_cont[mic_number] = '/0';
 }
 
 static enum hrtimer_restart stoperica_callback(struct hrtimer* param){
 	
-    if(ispis == 1)
-        printk("JEDAN MIC, ugao: %d - %d\n", angle[0], angle[1]);
-    else if(ispis == 2)
-        printk("DVA MICA, vreme: %llu, ugao: %d - %d\n", kt_end, angle[0], angle[1]); //napraviti da ide u ms, a ne u ns
-    else
-        printk("NI JEDAN JEDINI\n");
+    if(!mode) {
+        if(ispis == 1)
+            printk("JEDAN MIC, ugao: %d - %d\n", angle[0], angle[1]);
+        else if(ispis == 2)
+            printk("DVA MICA, vreme: %llu, ugao: %d - %d\n", kt_end, angle[0], angle[1]); //napraviti da ide u ms, a ne u ns
+        else
+            printk("NI JEDAN JEDINI\n");
 
-    ispis = 0;
+        ispis = 0;
     
-    first_irq = -1;
+        first_irq = -1;
+    }
 
     hrtimer_forward(&stoperica, ktime_get(), kt);
 
@@ -450,17 +447,16 @@ static enum hrtimer_restart stoperica_callback(struct hrtimer* param){
 static enum hrtimer_restart stoperica_cont_callback(struct hrtimer* param){
 	
 		
-	//sekund++;
-    array_to_string(mic_array);
-    printk("{%s}", string_cont);
+	if(mode) {
+        array_to_string(mic_array);
+        printk("{%s}", string_cont);
     
-    first_irq = -1;
+        first_irq = -1;
 	
-    non_active(mic_array);
+        non_active(mic_array);
+    }
 
 	hrtimer_forward(&stoperica_cont, ktime_get(), kt_cont);	
-
-	
 
 	return HRTIMER_RESTART;
 }
@@ -607,8 +603,11 @@ int gpio_driver_init(void)
     }
 
     gpio_driver_command = kmalloc(BUF_LEN, GFP_KERNEL);
-    //string_cont = kmalloc(BUF_LEN, GFP_KERNEL);
-
+    if(!gpio_driver_command)
+    {
+        result = -ENOMEM;
+        goto fail_no_mem;
+    }
 
     /* Initialize data buffer. */
     memset(gpio_driver_buffer, 0, BUF_LEN);
@@ -623,7 +622,8 @@ int gpio_driver_init(void)
 
     /* Initialize GPIO pins. */
 
-    int i, j = 0;
+    //Hardkodovane vrednosti za 2 mica
+    /*int i, j = 0;
             mic_number = 2;			
 			gpio_driver_command[0] = 4;
             gpio_driver_command[1] = 23;
@@ -654,7 +654,7 @@ int gpio_driver_init(void)
                     printk("Error: ISR not registered!\n");
                 }
 
-            }
+            }/*
 
 
 
@@ -672,7 +672,7 @@ int gpio_driver_init(void)
     stoperica.function = &stoperica_callback;
     stoperica_cont.function = &stoperica_cont_callback;
     hrtimer_start(&stoperica_cont, kt_cont, HRTIMER_MODE_REL);
-    //hrtimer_start(&stoperica, kt, HRTIMER_MODE_REL);
+    hrtimer_start(&stoperica, kt, HRTIMER_MODE_REL); //ne brisati ovo
 	
 
     return 0;
@@ -834,9 +834,9 @@ static ssize_t gpio_driver_write(struct file *filp, const char *buf, size_t len,
         
 		if(gpio_driver_buffer[0] == '0') {  
 			int i, j = 0;
-            mic_number = gpio_driver_buffer[2];			
+            mic_number = gpio_driver_buffer[2] - '0';			
 			for(i = 4; i < len - 1; i += 2) { //We are sending pins as char(abcd...) we need to subtract null
-                gpio_driver_command[j++] = gpio_driver_buffer[i]-'_';
+                gpio_driver_command[j++] = gpio_driver_buffer[i] - '_';
 				SetGpioPinDirection(gpio_driver_buffer[i] - '_',GPIO_DIRECTION_IN);
                 SetInternalPullUpDown(gpio_driver_buffer[i] - '_', PULL_UP);
 			}
@@ -846,7 +846,7 @@ static ssize_t gpio_driver_write(struct file *filp, const char *buf, size_t len,
 
             for(i = 0; i < mic_number; i++) { //
                 int result;
-                str[3] = i+'0';
+                str[3] = i + '0';
                 str[4] = 0;
                 result = gpio_request_one(gpio_driver_command[i], GPIOF_IN, str);
 	            if(result != 0)
