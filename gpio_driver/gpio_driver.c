@@ -17,6 +17,7 @@
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
+
 MODULE_LICENSE("Dual BSD/GPL");
 
 // NOTE: Check Broadcom BCM8325 datasheet, page 91+
@@ -171,9 +172,10 @@ int ispis = 0;
 #define BUF_LEN 80
 char* gpio_driver_buffer;
 char* gpio_driver_command;
+char string_cont[9] = {'-', '-', '-', '-', '-', '-', '-', '-', '-'};
 
 /*Default mode is impulse*/
-int mode = 0;
+int mode = 1; // kontinualni na 1
 
 /* Virtual address where the physical GPIO address is mapped */
 void* virt_gpio_base;
@@ -182,16 +184,16 @@ void* virt_gpio_base;
 static int irqs[9] = {-1,-1,-1,-1,-1,-1,-1,-1,-1};
 
 static int first_irq = -1;
-static int working = 0;
+//static int working = 0;
 
 //timer
 static struct hrtimer stoperica;
-static struct hrtimer stoperica_sekund;
+static struct hrtimer stoperica_cont;
 static ktime_t kt;
-static ktime_t kt_sekund;
+static ktime_t kt_cont;
 static long vreme;
-static int sekund;
-static int stopped = 1;
+//static int sekund;
+//static int stopped = 1;
 static u64 kt_start;
 static u64 kt_end;
 /*
@@ -406,6 +408,27 @@ char GetGpioPinValue(char pin)
 
     return (tmp >> pin);
 }
+void non_active(int* mics) 
+{
+    int i = 0;
+    for(i = 0; i < mic_number; i++) {
+        mics[i] = 0;
+    }
+
+}
+
+void array_to_string(int mics[])
+{
+    int i;
+    for(i = 0; i < mic_number; i++){
+        string_cont[i] = mic_array[i] + '0'; 
+        //printk("%c", string_cont[i]);
+        //snprintf(string, sizeof(string), "%d ", mic_array[i]);
+        //string[i] =  mic_array[i] + '0';
+        //itoa(mic_array[i], string[i], 10);
+    }
+    //string_cont[mic_number] = '/0';
+}
 
 static enum hrtimer_restart stoperica_callback(struct hrtimer* param){
 	
@@ -424,12 +447,18 @@ static enum hrtimer_restart stoperica_callback(struct hrtimer* param){
 
 	return HRTIMER_RESTART;
 }
-static enum hrtimer_restart stoperica_sekund_callback(struct hrtimer* param){
+static enum hrtimer_restart stoperica_cont_callback(struct hrtimer* param){
 	
 		
-	sekund++;
+	//sekund++;
+    array_to_string(mic_array);
+    printk("{%s}", string_cont);
+    
+    first_irq = -1;
 	
-	hrtimer_forward(&stoperica_sekund, ktime_get(), kt_sekund);	
+    non_active(mic_array);
+
+	hrtimer_forward(&stoperica_cont, ktime_get(), kt_cont);	
 
 	
 
@@ -449,14 +478,7 @@ int num_of_active_mics(int* mics)
 
     return ret_val;
 }
-void non_active(int* mics) 
-{
-    int i = 0;
-    for(i = 0; i < mic_number; i++) {
-        mics[i] = 0;
-    }
 
-}
 
 int angle_search(int first_irq, int current_irq)
 {
@@ -511,26 +533,32 @@ static irqreturn_t h_irq_gpioPROBA(int irq, void *data)
                     }
                 }
             }
-         /*  if(num_of_active_mics(mic_array) == 0){
-                printk("Interrupt from IRQ 0x%x\n", irq);
-                //startuj stoperice
-              //  mic_array[] = 1; //
-            }
-            else if(num_of_active_mics(mic_array) == 1 && vreme < (60000*9/mic_number)) {
-             //   mic_array[] = 1;
-                printk("Interrupt from IRQ 0x%x\n", irq);
-                printk("Sound detected b \n");
-            }
-            if(sekund == 1){
-                
-                non_active(mic_array);
-                vreme = 0;
-                sekund = 0;
-            }*/
+         
 
         break;
 
         case 1:
+
+            for(i = 0; i < mic_number; i++){
+                if(irqs[i] == irq){
+                    if(first_irq == -1){
+                        first_irq = irq;
+                        mic_array[i] = 1;
+                        //printk("Interrupt from IRQ 0x%x\n", irq);
+                        kt_start = ktime_get_ns();
+                        
+                    }
+                    else if(num_of_active_mics(mic_array) == 1 && first_irq != irq && ispis != 2){
+                        kt_end = ktime_get_ns() - kt_start;
+                        if(kt_end < 600000) {
+                            //ispis = 2;
+                            mic_array[i] = 1;
+                        }
+                            //printk("ktime = %llu", kt_end);
+                        
+                    }
+                }
+            }
         break;
 
 
@@ -579,6 +607,7 @@ int gpio_driver_init(void)
     }
 
     gpio_driver_command = kmalloc(BUF_LEN, GFP_KERNEL);
+    //string_cont = kmalloc(BUF_LEN, GFP_KERNEL);
 
 
     /* Initialize data buffer. */
@@ -636,13 +665,14 @@ int gpio_driver_init(void)
 	hrtimer_init(&stoperica, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	kt = ktime_set(2, 0);
 
-    sekund = 0;
-	hrtimer_init(&stoperica_sekund, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	kt_sekund = ktime_set(5, 0);
+    //sekund = 0;
+	hrtimer_init(&stoperica_cont, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	kt_cont = ktime_set(0, 100000000);
 	
     stoperica.function = &stoperica_callback;
-    stoperica_sekund.function = &stoperica_sekund_callback;
-    hrtimer_start(&stoperica, kt, HRTIMER_MODE_REL);
+    stoperica_cont.function = &stoperica_cont_callback;
+    hrtimer_start(&stoperica_cont, kt_cont, HRTIMER_MODE_REL);
+    //hrtimer_start(&stoperica, kt, HRTIMER_MODE_REL);
 	
 
     return 0;
@@ -679,6 +709,7 @@ void gpio_driver_exit(void)
     printk(KERN_INFO "Removing gpio_driver module\n");
 
 	hrtimer_cancel(&stoperica);
+    hrtimer_cancel(&stoperica_cont);
 
     /* Release IRQ and handler. */
  
