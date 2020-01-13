@@ -835,7 +835,7 @@ static ssize_t gpio_driver_write(struct file *filp, const char *buf, size_t len,
 		if(gpio_driver_buffer[0] == '0') {  
 			int i, j = 0;
             mic_number = gpio_driver_buffer[2] - '0';			
-			for(i = 4; i < len - 1; i += 2) { //We are sending pins as char(abcd...) we need to subtract null
+			for(i = 4; i < len - 1; i++ /*i += 2*/) { //We are sending pins as char(abcd...) we need to subtract null
                 gpio_driver_command[j++] = gpio_driver_buffer[i] - '_';
 				SetGpioPinDirection(gpio_driver_buffer[i] - '_',GPIO_DIRECTION_IN);
                 SetInternalPullUpDown(gpio_driver_buffer[i] - '_', PULL_UP);
