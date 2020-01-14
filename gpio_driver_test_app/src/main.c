@@ -14,7 +14,6 @@ char* itoa(int value, char* result, int base);
 
 int main()
 {
-	FILE* fp;
     int file_desc;
     int ret_val;
     char tmp[BUF_LEN];
@@ -25,68 +24,70 @@ int main()
 	int rez;
 
     /* Open dummy file. */
-	fp = fopen("/dev/test", "r+");
-	if(fp == NULL) {
-		//printf("Error, file not opened\n");
-		perror("Error");
-		return -1;
-	}
+    file_desc = open("/dev/test", O_RDWR);
 
-	/*file_desc = open("/SPPURV2_projekat/test.txt", O_RDWR);
     if(file_desc < 0)
     {
-		perror("Error");
-        //printf("Error, 'test' not opened\n");
+        printf("Error, 'dummy' not opened\n");
         return -1;
-    }*/
-
-	do {
-        printf("Unesite koliko mikrofona ste povezali(MAX = %d):\n", MAX_MIC);
-        scanf("%d", &num_of_mic);
-	} while(num_of_mic > MAX_MIC);
+    }
 	
+	do
+	{
+	printf("Unesite koliko mikrofona ste povezali:\n");
+	scanf("%d", &num_of_mic);
 
-    int mic_array[num_of_mic];
-    printf("Unesite na koje pinove ste povezali mikrofone (posle svakog pina enter): ");
+	}while(num_of_mic > MAX_MIC);
+
+	
+	int mic_array[num_of_mic];
+
+    printf("Unesite na koje pinove ste povezali mikrofone (posle svakog pina enter), pinovi idu od 4 do 27:\n ");
+
     int i;
+
     for(i = 0; i < num_of_mic; i++) {
         scanf("%d", &mic_array[i]);
         mic[i] = '_' + mic_array[i];
         //printf("%s", mic);
     }
-	//mic[i] = '/0';
 
-	itoa(num_of_mic, pom, 10);
-	strcpy(tmp, "0,");
-	strcat(tmp, pom);
-	strcat(tmp, ",");
-	strcat(tmp, mic);
+	mic[i] = '\0';
+ 
+    itoa(num_of_mic, pom, 10);
+    strcpy(tmp, "0,");
+    strcat(tmp, pom);
+    strcat(tmp, ",");
+    strcat(tmp, mic);
 
 	printf("Komanda izgleda: %s\n", tmp);
-	
+
     /* Write to dummy file. */
-    //ret_val = write(file_desc, tmp, sizeof(tmp));
-	fwrite(tmp, sizeof(char), sizeof(tmp), fp);
-
-	do {
-
+    ret_val = write(file_desc, tmp, BUF_LEN);
+	do{
 		printf("Unesite rezim rada u kom zelite da radite(0-impuls, 1-konstantan izvor):\n");	
 		scanf("%d", &rez);	
-
-	} while(rez > 1 || rez < 0);
+	}while(rez > 1 || rez < 0);
 
 	itoa(rez, pom, 10);
+
 	strcpy(rezim, "1,");
+
 	strcat(rezim, pom);
 
-	printf("Rezim: %s\n", rezim);
-	frwite(rezim, sizeof(char), sizeof(rezim), fp);
+	printf("%s\n", rezim);
+	
+    /* Read from dummy file. */
+    
+	while(1) {
 
-    //printf("%s", tmp);
+		ret_val = read(file_desc, tmp, BUF_LEN);	
+	    printf("Temp: %s\n Ret_val: %d\n", tmp, ret_val);
+		sleep(2);
 
+	}
     /* Close dummy file. */
-	fclose(fp);
-    //close(file_desc);
+    close(file_desc);
     
     return 0;
 }

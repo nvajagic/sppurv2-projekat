@@ -163,6 +163,7 @@ module_exit(gpio_driver_exit);
 int mic_number = 0;
 int mic_array[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 int angle[2] = {0, 0};
+char message[50];
 
 /* Major number. */
 int gpio_driver_major;
@@ -428,12 +429,18 @@ void array_to_string(int mics[])
 static enum hrtimer_restart stoperica_callback(struct hrtimer* param){
 	
     if(!mode) {
-        if(ispis == 1)
+        if(ispis == 1) {
             printk("JEDAN MIC, ugao: %d - %d\n", angle[0], angle[1]);
-        else if(ispis == 2)
+            snprintf(message, sizeof(message), "JEDAN MIC, ugao: %d - %d\0", angle[0], angle[1]);
+        }
+        else if(ispis == 2) {
             printk("DVA MICA, vreme: %llu, ugao: %d - %d\n", kt_end, angle[0], angle[1]); //napraviti da ide u ms, a ne u ns
-        else
+            snprintf(message, sizeof(message), "DVA MICA, vreme: %llu, ugao: %d - %d\0", kt_end, angle[0], angle[1]);
+        }
+        else {
             printk("NI JEDAN JEDINI\n");
+            snprintf(message, sizeof(message), "NI JEDAN JEDINI\0");
+        }
 
         ispis = 0;
     
@@ -449,7 +456,8 @@ static enum hrtimer_restart stoperica_cont_callback(struct hrtimer* param){
 		
 	if(mode) {
         array_to_string(mic_array);
-        printk("{%s}", string_cont);
+        snprintf(message, sizeof(message), "{%s}", string_cont);
+        printk(message);
     
         first_irq = -1;
 	
@@ -780,26 +788,23 @@ static ssize_t gpio_driver_read(struct file *filp, char *buf, size_t len, loff_t
     /* Size of valid data in gpio_driver - data to send in user space. */
     int data_size = 0;
 
-    if (*f_pos == 0)
+    /* Get size of valid data. */
+    //data_size = strlen(gpio_driver_buffer);
+    data_size = strlen(message);
+    /* Send data to user space. */
+    /*if (copy_to_user(buf, gpio_driver_buffer, data_size) != 0)
     {
-        /* Get size of valid data. */
-        data_size = strlen(gpio_driver_buffer);
+        return -EFAULT;
+    }*/
 
-        /* Send data to user space. */
-        if (copy_to_user(buf, gpio_driver_buffer, data_size) != 0)
-        {
-            return -EFAULT;
-        }
-        else
-        {
-            (*f_pos) += data_size;
-
-            return data_size;
-        }
+    if(copy_to_user(buf, message, data_size) != 0) {
+        return -EFAULT;
     }
     else
     {
-        return 0;
+        
+
+        return data_size;
     }
 }
 
