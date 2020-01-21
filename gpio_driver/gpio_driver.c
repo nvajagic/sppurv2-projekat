@@ -16,6 +16,7 @@
 #include <linux/gpio.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
+#include <asm/div64.h> //For do_div
 
 
 MODULE_LICENSE("Dual BSD/GPL");
@@ -164,10 +165,11 @@ int mic_number = 0;
 int mic_array[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 int angle[2] = {0, 0};
 char message[50];
+int init_status = 0;
 
 /* Major number. */
 int gpio_driver_major;
-int ispis = 0;
+int output = 0;
 
 /* Buffer to store data. */
 #define BUF_LEN 80
@@ -187,14 +189,12 @@ static int irqs[9] = {-1,-1,-1,-1,-1,-1,-1,-1,-1};
 static int first_irq = -1;
 //static int working = 0;
 
-//timer
-static struct hrtimer stoperica;
-static struct hrtimer stoperica_cont;
+//Timer
+static struct hrtimer timer;
+static struct hrtimer timer_cont;
 static ktime_t kt;
 static ktime_t kt_cont;
-static long vreme;
-//static int sekund;
-//static int stopped = 1;
+static long time;
 static u64 kt_start;
 static u64 kt_end;
 /*
@@ -426,45 +426,55 @@ void array_to_string(int mics[])
     }
 }
 
-static enum hrtimer_restart stoperica_callback(struct hrtimer* param){
+/*
+ * We are trying to div by 1000 and we dont have 64-by divide modules
+ * This functions does a 64-bit by 32-bit divide
+ */
+unsigned long long divide_by_1000(unsigned long long a)
+{
+    do_div(a, 1000);
+    return a;
+}
+
+static enum hrtimer_restart timer_callback(struct hrtimer* param){
 	
     if(!mode) {
-        if(ispis == 1) {
-            printk("JEDAN MIC, ugao: %d - %d\n", angle[0], angle[1]);
-            snprintf(message, sizeof(message), "JEDAN MIC, ugao: %d - %d\0", angle[0], angle[1]);
+        if(output == 1) {
+            //printk("One microphone, angle: %d - %d\n", angle[0], angle[1]);
+            snprintf(message, sizeof(message), "One microphone, angle: %d - %d", angle[0], angle[1]);
         }
-        else if(ispis == 2) {
-            printk("DVA MICA, vreme: %llu, ugao: %d - %d\n", kt_end, angle[0], angle[1]); //napraviti da ide u ms, a ne u ns
-            snprintf(message, sizeof(message), "DVA MICA, vreme: %llu, ugao: %d - %d\0", kt_end, angle[0], angle[1]);
+        else if(output == 2) {
+            //printk("Two microphones, time: %llu microseconds, angle: %d - %d\n", divide_by_1000(kt_end), angle[0], angle[1]);
+            snprintf(message, sizeof(message), "Two microphones, time: %llu microseconds, angle: %d - %d", divide_by_1000(kt_end), angle[0], angle[1]);
         }
         else {
-            printk("NI JEDAN JEDINI\n");
-            snprintf(message, sizeof(message), "NI JEDAN JEDINI\0");
+            //printk("No sound source!\n");
+            snprintf(message, sizeof(message), "No sound source!");
         }
 
-        ispis = 0;
+        output = 0;
     
         first_irq = -1;
     }
 
-    hrtimer_forward(&stoperica, ktime_get(), kt);
+    hrtimer_forward(&timer, ktime_get(), kt);
 
 	return HRTIMER_RESTART;
 }
-static enum hrtimer_restart stoperica_cont_callback(struct hrtimer* param){
+static enum hrtimer_restart timer_cont_callback(struct hrtimer* param){
 	
 		
 	if(mode) {
         array_to_string(mic_array);
         snprintf(message, sizeof(message), "{%s}", string_cont);
-        printk(message);
+        //printk(message);
     
         first_irq = -1;
 	
         non_active(mic_array);
     }
 
-	hrtimer_forward(&stoperica_cont, ktime_get(), kt_cont);	
+	hrtimer_forward(&timer_cont, ktime_get(), kt_cont);	
 
 	return HRTIMER_RESTART;
 }
@@ -499,41 +509,39 @@ int angle_search(int first_irq, int current_irq)
     return ret_val;
 }
 
-static irqreturn_t h_irq_gpioPROBA(int irq, void *data)
+static irqreturn_t h_irq_gpioFun(int irq, void *data)
 {
    int i;
     switch(mode){
         case 0:
         
-            for(i = 0; i < mic_number; i++){
-                if(irqs[i] == irq){
-                    if(first_irq == -1){
+            for(i = 0; i < mic_number; i++) {
+                if(irqs[i] == irq) {
+                    if(first_irq == -1) {
                         first_irq = irq;
-                        //printk("Interrupt from IRQ 0x%x\n", irq);
                         kt_start = ktime_get_ns();
-                        angle[0] =  (i * 2) * (180/(2*mic_number - 1));
-                        angle[1] =  (i * 2 + 1) * (180/(2*mic_number - 1));
+                        angle[0] =  (i * 2) * (180 / (2 * mic_number - 1));
+                        angle[1] =  (i * 2 + 1) * (180 / (2 * mic_number - 1));
                     }
-                    else if(first_irq != irq && ispis != 2){
+                    else if(first_irq != irq && output != 2) {
                         kt_end = ktime_get_ns() - kt_start;
                         if(kt_end < 600000) {
-                            ispis = 2;
+                            output = 2;
                             if(angle_search(first_irq, irq) == 1) {  
-                                angle[0] =  (i * 2 + 1) * (180/(2*mic_number - 1));
-                                angle[1] =  (i * 2 + 2) * (180/(2*mic_number - 1));
+                                angle[0] =  (i * 2 + 1) * (180 / (2 * mic_number - 1));
+                                angle[1] =  (i * 2 + 2) * (180 / (2 * mic_number - 1));
                             }
                             else if(angle_search(first_irq, irq) == 2) {
-                                angle[0] = (i * 2 - 1) * (180/(2*mic_number - 1));
-                                angle[1] = (i * 2) * (180/(2*mic_number - 1));
+                                angle[0] = (i * 2 - 1) * (180 / (2 * mic_number - 1));
+                                angle[1] = (i * 2) * (180 / (2 * mic_number - 1));
                             }
                         }
-                            //printk("ktime = %llu", kt_end);
                         
                     }
-                    else if(ispis != 2){
+                    else if(output != 2) {
                         kt_end = ktime_get_ns() - kt_start;
                         if(kt_end > 600000)
-                            ispis = 1;
+                            output = 1;
                     }
                 }
             }
@@ -543,22 +551,19 @@ static irqreturn_t h_irq_gpioPROBA(int irq, void *data)
 
         case 1:
 
-            for(i = 0; i < mic_number; i++){
-                if(irqs[i] == irq){
-                    if(first_irq == -1){
+            for(i = 0; i < mic_number; i++) {
+                if(irqs[i] == irq) {
+                    if(first_irq == -1) {
                         first_irq = irq;
                         mic_array[i] = 1;
-                        //printk("Interrupt from IRQ 0x%x\n", irq);
                         kt_start = ktime_get_ns();
                         
                     }
-                    else if(num_of_active_mics(mic_array) == 1 && first_irq != irq && ispis != 2){
+                    else if(num_of_active_mics(mic_array) == 1 && first_irq != irq && output != 2){
                         kt_end = ktime_get_ns() - kt_start;
                         if(kt_end < 600000) {
-                            //ispis = 2;
                             mic_array[i] = 1;
                         }
-                            //printk("ktime = %llu", kt_end);
                         
                     }
                 }
@@ -567,11 +572,6 @@ static irqreturn_t h_irq_gpioPROBA(int irq, void *data)
 
 
     }
-	
-
-   // printk("Interrupt from IRQ 0x%x\n", irq);
-
-   // printk("GPIO_23 level\n");
 
     return IRQ_HANDLED;
 }
@@ -589,18 +589,18 @@ int gpio_driver_init(void)
 {
     int result = -1;
 
-    printk(KERN_INFO "Inserting gpio_driver module\n");
+    printk(KERN_INFO "Inserting Microphone Array Module\n");
 
     /* Registering device. */
     result = register_chrdev(0, "gpio_driver", &gpio_driver_fops);
     if (result < 0)
     {
-        printk(KERN_INFO "gpio_driver: cannot obtain major number %d\n", gpio_driver_major);
+        printk(KERN_INFO "GPIO_Driver: cannot obtain major number %d\n", gpio_driver_major);
         return result;
     }
 
     gpio_driver_major = result;
-    printk(KERN_INFO "gpio_driver major number is %d\n", gpio_driver_major);
+    printk(KERN_INFO "GPIO_Driver Major Number is %d\n", gpio_driver_major);
 
     /* Allocating memory for the buffer. */
     gpio_driver_buffer = kmalloc(BUF_LEN, GFP_KERNEL);
@@ -626,71 +626,23 @@ int gpio_driver_init(void)
     {
         result = -ENOMEM;
         goto fail_no_virt_mem;
-    }
+    }    
 
-    /* Initialize GPIO pins. */
-
-    //Hardkodovane vrednosti za 2 mica
-    /*int i, j = 0;
-            mic_number = 2;			
-			gpio_driver_command[0] = 4;
-            gpio_driver_command[1] = 23;
-                
-			SetGpioPinDirection(gpio_driver_command[0],GPIO_DIRECTION_IN);
-             SetInternalPullUpDown(gpio_driver_command[0], PULL_UP);
-			SetGpioPinDirection(gpio_driver_command[1],GPIO_DIRECTION_IN);
-             SetInternalPullUpDown(gpio_driver_command[1], PULL_UP);
-
-            char str[10] = "irq";
-            
-
-            for(i = 0; i < mic_number; i++) { //
-                int result;
-                str[3] = i+'0';
-                str[4] = 0;
-                result = gpio_request_one(gpio_driver_command[i], GPIOF_IN, str);
-	            if(result != 0)
-                {
-                    printk("Error: GPIO request failed!\n");
-                }
-   
-	            irqs[i] = gpio_to_irq(gpio_driver_command[i]);
-                printk("irq = %d\n",irqs[i]);
-	            result = request_irq(irqs[i], h_irq_gpioPROBA, IRQF_TRIGGER_FALLING, str, (void *)(h_irq_gpioPROBA));
-	            if(result != 0)
-                {
-                    printk("Error: ISR not registered!\n");
-                }
-
-            }/*
-
-
-
-    /* Microphones */
-       
-
-	vreme = 0;
-	hrtimer_init(&stoperica, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	time = 0;
+	hrtimer_init(&timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	kt = ktime_set(2, 0);
 
-    //sekund = 0;
-	hrtimer_init(&stoperica_cont, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	hrtimer_init(&timer_cont, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	kt_cont = ktime_set(0, 100000000);
 	
-    stoperica.function = &stoperica_callback;
-    stoperica_cont.function = &stoperica_cont_callback;
-    hrtimer_start(&stoperica_cont, kt_cont, HRTIMER_MODE_REL);
-    hrtimer_start(&stoperica, kt, HRTIMER_MODE_REL); //ne brisati ovo
+    timer.function = &timer_callback;
+    timer_cont.function = &timer_cont_callback;
+    hrtimer_start(&timer_cont, kt_cont, HRTIMER_MODE_REL);
+    hrtimer_start(&timer, kt, HRTIMER_MODE_REL);
 	
 
     return 0;
 
-fail_irq:
-    /* Unmap GPIO Physical address space. */
-    if (virt_gpio_base)
-    {
-        iounmap(virt_gpio_base);
-    }
 fail_no_virt_mem:
     /* Freeing buffer gpio_driver_buffer. */
     if (gpio_driver_buffer)
@@ -714,26 +666,26 @@ fail_no_mem:
  */
 void gpio_driver_exit(void)
 {
-    printk(KERN_INFO "Removing gpio_driver module\n");
+    printk(KERN_INFO "Removing Microphone Array Module\n");
 
-	hrtimer_cancel(&stoperica);
-    hrtimer_cancel(&stoperica_cont);
+	hrtimer_cancel(&timer);
+    hrtimer_cancel(&timer_cont);
 
     /* Release IRQ and handler. */
  
 
-    int i = 0;
+    int i;
     for (i = 0; i < mic_number; i++) {
         SetInternalPullUpDown(gpio_driver_command[i] - '_', PULL_NONE);
     }
 
 
-    for(i = 0; i < mic_number; i++) { //
+    for(i = 0; i < mic_number; i++) {
         disable_irq(irqs[i]);
-        free_irq(irqs[i],h_irq_gpioPROBA);
+        free_irq(irqs[i],h_irq_gpioFun);
         gpio_free(gpio_driver_command[i]);
 
-        }
+    }
 	
 
 
@@ -836,44 +788,52 @@ static ssize_t gpio_driver_write(struct file *filp, const char *buf, size_t len,
 		 * '0' for initialization
 		 * '1' for command
 		 */
-        
 		if(gpio_driver_buffer[0] == '0') {  
 			int i, j = 0;
+            if(init_status == 1) { //If we already initialized pins, and irqs, we need to free them before new init
+                for (i = 0; i < mic_number; i++) {
+                    SetInternalPullUpDown(gpio_driver_command[i] - '_', PULL_NONE);
+                }
+
+
+                for(i = 0; i < mic_number; i++) {
+                    disable_irq(irqs[i]);
+                    free_irq(irqs[i],h_irq_gpioFun);
+                    gpio_free(gpio_driver_command[i]);
+                }
+            }
+            //Initialization
             mic_number = gpio_driver_buffer[2] - '0';			
-			for(i = 4; i < len - 1; i++ /*i += 2*/) { //We are sending pins as char(abcd...) we need to subtract null
+			for(i = 4; i < len - 1; i++) { //We are sending pins as chars(abcd...) we need to subtract null
                 gpio_driver_command[j++] = gpio_driver_buffer[i] - '_';
 				SetGpioPinDirection(gpio_driver_buffer[i] - '_',GPIO_DIRECTION_IN);
                 SetInternalPullUpDown(gpio_driver_buffer[i] - '_', PULL_UP);
 			}
 
             char str[10] = "irq";
-            
-
-            for(i = 0; i < mic_number; i++) { //
+            for(i = 0; i < mic_number; i++) {
                 int result;
                 str[3] = i + '0';
                 str[4] = 0;
                 result = gpio_request_one(gpio_driver_command[i], GPIOF_IN, str);
-	            if(result != 0)
-                {
+	            if(result != 0) {
                     printk("Error: GPIO request failed!\n");
                 }
    
 	            irqs[i] = gpio_to_irq(gpio_driver_command[i]);
-	            result = request_irq(irqs[i], h_irq_gpioPROBA, IRQF_TRIGGER_FALLING, str, (void *)(h_irq_gpioPROBA));
-	            if(result != 0)
-                {
+	            result = request_irq(irqs[i], h_irq_gpioFun, IRQF_TRIGGER_FALLING, str, (void *)(h_irq_gpioFun));
+	            if(result != 0) {
                     printk("Error: ISR not registered!\n");
                 }
 
             }
-	
+            init_status = 1;
 		}
 		else {
 			if(gpio_driver_buffer[2] == '0')
-				 mode = 0; // impuls
+				mode = 0; // Impulse
 			else
-				mode = 1; //konstantan
+				mode = 1; //Constant mode
 		}
 			
         return len;
